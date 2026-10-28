@@ -1,0 +1,9 @@
+*/*.jpg
+*/*.jpeg
+*/*.png
+*/*.mp3
+*/*.mp4
+
+*.xcf
+.current
+

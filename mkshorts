@@ -1,0 +1,138 @@
+#!/bin/bash
+set -euo pipefail
+
+TODAY=$(date +%Y-%m-%d)
+MAX_ATTEMPTS=3
+TEXT_DELAY=3  # Задержка появления текста в секундах
+
+# --- Определяем источник аудио ---
+case "$(uname -s)" in
+    Linux*)   AUDIO_SRC="-f pulse -i alsa_input.usb-MUSIC-BOOST_Usb_Microphone-00.mono-fallback" ;;
+    Darwin*)  AUDIO_SRC="-f avfoundation -i :0" ;;
+    MINGW*|MSYS*|CYGWIN*)
+        echo "Windows: укажите имя микрофона в AUDIO_SRC"
+        AUDIO_SRC="-f dshow -i audio=YOUR_MIC_NAME"
+        ;;
+    *) echo "Неизвестная ОС"; exit 1 ;;
+esac
+
+# --- Основной цикл по директориям ---
+shopt -s nullglob
+dirs=( [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] )
+shopt -u nullglob
+
+if [ ${#dirs[@]} -eq 0 ]; then
+    echo "Директории с датами не найдены."
+    exit 0
+fi
+
+for dir in "${dirs[@]}"; do
+    [[ "$dir" < "$TODAY" ]] && continue
+    [ -f "$dir/audio.mp3" ] && continue
+
+    # Ищем картинку
+    img=""
+    for ext in jpg png; do
+        if [ -f "$dir/picture.$ext" ]; then
+            img="$dir/picture.$ext"
+            break
+        fi
+    done
+    [ -z "$img" ] && { echo "⚠  В $dir нет picture.jpg/png — пропускаю."; continue; }
+
+    # Проверяем наличие titles.png
+    if [ ! -f "$dir/titles.png" ]; then
+        echo "⚠  В $dir нет titles.png — пропускаю."
+        continue
+    fi
+
+    echo
+    echo "================================================"
+    echo "📁 Обработка: $dir"
+    echo "================================================"
+
+    # 1. Генерируем видео с наложением titles.png через TEXT_DELAY секунд
+    TEXT_DELAY=3
+
+    if [ ! -f "$dir/titles.png" ]; then
+	    echo "⚠  В $dir нет titles.png — пропускаю."
+	    continue
+    fi
+
+    if [ ! -f "$dir/video_silent.mp4" ]; then
+	    echo "🎬 Создаю видео: картинка → подписи через ${TEXT_DELAY}с..."
+	    ffmpeg -y -loglevel error \
+	      -loop 1 -framerate 30 -i "$img" \
+	      -loop 1 -framerate 30 -i "$dir/titles.png" \
+	      -filter_complex "\
+	[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=rgb24[base];\
+	[1:v]scale=1080:1920,setsar=1,format=rgb24[titled];\
+	[base][titled]overlay=0:0:enable='gte(t,${TEXT_DELAY})'[v]" \
+	      -map "[v]" -r 30 -t 60 \
+	      -c:v libx264 -preset slow -crf 20 -tune stillimage \
+	      -pix_fmt yuv420p "$dir/video_silent.mp4"
+    fi
+
+    # 2. Записываем аудио с попытками
+    echo "Текст для озвучки (из README.md):"
+    echo "------------------------------------------------"
+    [ -f "$dir/README.md" ] && cat "$dir/README.md" || echo "(README.md не найден)"
+    echo
+    echo "------------------------------------------------"
+    read -rp "⏳ Нажмите Enter, чтобы начать запись звука для видео…" ans
+    attempt=1
+    audio_ok=0
+    while [ $attempt -le $MAX_ATTEMPTS ]; do
+        echo
+        echo "🎤 Попытка $attempt/$MAX_ATTEMPTS."
+        echo "   Говорите в микрофон. Когда закончите — нажмите 'q'."
+        
+        # Запись в WAV
+        ffmpeg -loglevel warning $AUDIO_SRC \
+          -ac 2 -ar 44100 \
+          "$dir/audio_temp.wav"
+
+        # Конвертация в MP3
+        ffmpeg -y -loglevel warning -i "$dir/audio_temp.wav" \
+          -c:a libmp3lame -b:a 192k \
+          "$dir/audio.mp3"
+
+        rm -f "$dir/audio_temp.wav"
+
+        echo
+        read -rp "👂 Устраивает качество аудио? (y/n): " ans
+        case "$ans" in
+            [yY]*)
+                audio_ok=1
+                break
+                ;;
+            [nN]*)
+                rm -f "$dir/audio.mp3"
+                attempt=$((attempt + 1))
+                if [ $attempt -gt $MAX_ATTEMPTS ]; then
+                    echo "❌ Лимит попыток исчерпан — пропускаю директорию."
+                fi
+                ;;
+            *)
+                echo "   Не понял ответ, считаю за 'n'."
+                rm -f "$dir/audio.mp3"
+                attempt=$((attempt + 1))
+                ;;
+        esac
+    done
+
+    [ "$audio_ok" -eq 0 ] && continue
+
+    # 3. Склеиваем видео и аудио
+    echo "🎞  Собираю финальное видео..."
+    ffmpeg -y -i "$dir/video_silent.mp4" -i "$dir/audio.mp3" \
+      -c:v copy -c:a copy -shortest \
+      -movflags +faststart \
+      "$dir/short.mp4"
+
+    echo "✅ Готово: $dir/short.mp4"
+done
+
+echo
+echo "🎉 Все обработано."
+
