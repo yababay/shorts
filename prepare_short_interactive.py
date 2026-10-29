@@ -3,7 +3,7 @@
 
 import gi
 gi.require_version('Gimp', '3.0')
-from gi.repository import Gimp, GObject, GLib, Gio
+from gi.repository import Gimp, GObject, GLib, Gio, Gtk
 gi.require_version('Gegl', '0.4')
 import sys
 import os
@@ -11,44 +11,86 @@ import glob
 
 shorts_dir = '/home/mabel/.3f-lab/_projects/shorts'
 
-# Используем *args, чтобы безопасно обработать вариации сигнатуры в GIMP 3.0
+def select_photo(parent_window=None):
+    # Create file selection window
+    dialog = Gtk.FileChooserDialog(
+        title="Выберите картинку для видео",
+        action=Gtk.FileChooserAction.OPEN,
+        buttons=(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                 Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
+    )
+
+    # Filters for .txt files
+    filter_img = Gtk.FileFilter()
+    filter_img.set_name("Изображения из Телеграм")
+    filter_img.add_pattern("photo_*.jpg")
+    filter_img.add_pattern("photo_*.jpeg")
+    filter_img.add_pattern("photo_*.png")
+    dialog.add_filter(filter_img)
+
+    # Run dialog and get response
+    response = dialog.run()
+    filename = None
+
+    if response == Gtk.ResponseType.OK:
+        filename = dialog.get_filename()
+
+    dialog.destroy()
+
+    return filename
+
 def run_prepare_short(procedure, run_mode, image, drawables, config, data):
+
     try:
-        # Безопасно извлекаем config (и run_data, если он есть)
-        # config = args[0] if len(args) > 0 else None
-        
-        if config is None:
-            Gimp.message("❌ Ошибка: не передан объект config")
+
+        photo_path = select_photo()
+
+        if not os.path.exists(photo_path):
+            Gimp.message(f"❌ Не выбран файл с префиксом photo_")
             return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
 
-        # 1. Получаем строку с именем директории
-        dir_name = config.get_property("dir-path")
-        
-        if not dir_name:
-            Gimp.message("❌ Имя директории не указано")
-            return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
-        
-        # 2. Формируем путь (ИСПРАВЛЕНО: dir_name — это строка, у неё нет .get_path())
-        dir_path = os.path.join(shorts_dir, str(dir_name))
-        
-        # 3. Проверяем, что это директория
-        if not os.path.isdir(dir_path):
-            Gimp.message(f"❌ Не является директорией:\n{dir_path}")
-            return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
-        
-        # 4. Ищем README.md
+        dir_name = os.path.dirname(file)
+
         readme_path = os.path.join(dir_path, "README.md")
         if not os.path.exists(readme_path):
             Gimp.message(f"❌ Не найден README.md в:\n{dir_path}")
             return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
+
+        # Безопасно извлекаем config (и run_data, если он есть)
+        # config = args[0] if len(args) > 0 else None
+        
+        #if config is None:
+        #    Gimp.message("❌ Ошибка: не передан объект config")
+        #    return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
+
+        # 1. Получаем строку с именем директории
+        #dir_name = config.get_property("dir-path")
+        
+        #if not dir_name:
+        #    Gimp.message("❌ Имя директории не указано")
+        #    return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
+        
+        # 2. Формируем путь (ИСПРАВЛЕНО: dir_name — это строка, у неё нет .get_path())
+        #dir_path = os.path.join(shorts_dir, str(dir_name))
+        
+        # 3. Проверяем, что это директория
+        #if not os.path.isdir(dir_path):
+        #    Gimp.message(f"❌ Не является директорией:\n{dir_path}")
+        #    return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
+        
+        # 4. Ищем README.md
+        #readme_path = os.path.join(dir_path, "README.md")
+        #if not os.path.exists(readme_path):
+        #    Gimp.message(f"❌ Не найден README.md в:\n{dir_path}")
+        #    return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
         
         # 5. Ищем файл с префиксом photo_
-        photo_files = glob.glob(os.path.join(dir_path, "photo_*"))
-        if not photo_files:
-            Gimp.message(f"❌ Не найдены файлы с префиксом photo_ в:\n{dir_path}")
-            return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
+        #photo_files = glob.glob(os.path.join(dir_path, "photo_*"))
+        #if not photo_files:
+        #    Gimp.message(f"❌ Не найдены файлы с префиксом photo_ в:\n{dir_path}")
+        #    return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
         
-        photo_path = photo_files[0]
+        #photo_path = photo_files[0]
         
         # 6. Успех!
         Gimp.message(f"✅ Найдено:\n\nREADME: {readme_path}\nPhoto:  {photo_path}")
