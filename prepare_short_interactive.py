@@ -49,11 +49,11 @@ def run_prepare_short(procedure, run_mode, image, drawables, config, data):
             Gimp.message(f"❌ Не выбран файл с префиксом photo_")
             return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
 
-        dir_name = os.path.dirname(file)
+        dir_name = os.path.dirname(photo_path)
 
-        readme_path = os.path.join(dir_path, "README.md")
+        readme_path = os.path.join(dir_name, "README.md")
         if not os.path.exists(readme_path):
-            Gimp.message(f"❌ Не найден README.md в:\n{dir_path}")
+            Gimp.message(f"❌ Не найден README.md в:\n{dir_name}")
             return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
 
         # Безопасно извлекаем config (и run_data, если он есть)
@@ -146,14 +146,14 @@ class PrepareShortPlugin(Gimp.PlugIn):
         )
         
         # Правильный метод для GIMP 3.0
-        p.add_string_argument(
-            "dir-path",
-            "Имя директории",
-            "Например: 2026-10-28",
-            # "2026-10-28",  # значение по умолчанию
-            '.current',
-            GObject.ParamFlags.READWRITE
-        )
+        #p.add_string_argument(
+        #    "dir-path",
+        #    "Имя директории",
+        #    "Например: 2026-10-28",
+        #    # "2026-10-28",  # значение по умолчанию
+        #    '.current',
+        #    GObject.ParamFlags.READWRITE
+        #)
         
         p.set_documentation(
             "Ищет картинку и текст в выбранной директории",
