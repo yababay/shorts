@@ -1,49 +1,55 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail   # -e намеренно убран: read и ffmpeg могут возвращать ненулевой код
 
 TODAY=$(date +%Y-%m-%d)
 MAX_ATTEMPTS=3
-TEXT_DELAY=3  # Задержка появления текста в секундах
+TEXT_DELAY=3
+MIC="alsa_input.usb-MUSIC-BOOST_Usb_Microphone-00.mono-fallback"
 
-# --- Определяем источник аудио ---
+# --- Источник аудио (массив, чтобы корректно передавать аргументы) ---
 case "$(uname -s)" in
-    Linux*)   AUDIO_SRC="-f pulse -i alsa_input.usb-MUSIC-BOOST_Usb_Microphone-00.mono-fallback" ;;
-    Darwin*)  AUDIO_SRC="-f avfoundation -i :0" ;;
+    Linux*)  AUDIO_IN=(-f pulse -i "$MIC") ;;
+    Darwin*) AUDIO_IN=(-f avfoundation -i ":0") ;;
     MINGW*|MSYS*|CYGWIN*)
-        echo "Windows: укажите имя микрофона в AUDIO_SRC"
-        AUDIO_SRC="-f dshow -i audio=YOUR_MIC_NAME"
-        ;;
-    *) echo "Неизвестная ОС"; exit 1 ;;
+        echo "Укажите свой вариант AUDIO_IN для Windows (dshow)." >&2
+        exit 1 ;;
+    *) echo "Неизвестная ОС" >&2; exit 1 ;;
 esac
 
-# --- Основной цикл по директориям ---
-shopt -s nullglob
-dirs=( [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] )
-shopt -u nullglob
+# ============================================================
+# Обработка одной директории.
+# Возвращает 0 — успешно или пропущено, 1 — ошибка.
+# ============================================================
+process_directory() {
+    local dir="${1%/}"
+    local img="" readme="$dir/README.md" titles="$dir/titles.png"
+    local silent="$dir/video_silent.mp4"
+    local audio="$dir/audio.mp3"
+    local attempt ans
 
-if [ ${#dirs[@]} -eq 0 ]; then
-    echo "Директории с датами не найдены."
-    exit 0
-fi
+    if [[ ! -d "$dir" ]]; then
+        echo "⚠  Нет директории: $dir" >&2
+        return 1
+    fi
 
-for dir in "${dirs[@]}"; do
-    [[ "$dir" < "$TODAY" ]] && continue
-    [ -f "$dir/audio.mp3" ] && continue
-
-    # Ищем картинку
-    img=""
-    for ext in jpg png; do
-        if [ -f "$dir/picture.$ext" ]; then
+    for ext in jpg jpeg png; do
+        if [[ -f "$dir/picture.$ext" ]]; then
             img="$dir/picture.$ext"
             break
         fi
     done
-    [ -z "$img" ] && { echo "⚠  В $dir нет picture.jpg/png — пропускаю."; continue; }
 
-    # Проверяем наличие titles.png
-    if [ ! -f "$dir/titles.png" ]; then
-        echo "⚠  В $dir нет titles.png — пропускаю."
-        continue
+    if [[ -z "$img" ]]; then
+        echo "⚠  $dir: нет picture.jpg/png — пропускаю."
+        return 0
+    fi
+    if [[ ! -f "$readme" ]]; then
+        echo "⚠  $dir: нет README.md — пропускаю."
+        return 0
+    fi
+    if [[ ! -f "$titles" ]]; then
+        echo "⚠  $dir: нет titles.png — пропускаю."
+        return 0
     fi
 
     echo
@@ -51,86 +57,115 @@ for dir in "${dirs[@]}"; do
     echo "📁 Обработка: $dir"
     echo "================================================"
 
-    # 1. Генерируем видео с наложением titles.png через TEXT_DELAY секунд
-    TEXT_DELAY=3
-
-    if [ ! -f "$dir/titles.png" ]; then
-	    echo "⚠  В $dir нет titles.png — пропускаю."
-	    continue
+    # --- 1. Тихое видео: картинка -> titles.png через TEXT_DELAY секунд ---
+    # Пересобираем, если нет файла ИЛИ исходники новее готового видео.
+    if [[ ! -f "$silent" || "$img" -nt "$silent" || "$titles" -nt "$silent" ]]; then
+        echo "🎬 Создаю видео без звука (текст через ${TEXT_DELAY}с)..."
+        ffmpeg -y -loglevel error \
+            -loop 1 -framerate 30 -i "$img" \
+            -loop 1 -framerate 30 -i "$titles" \
+            -filter_complex "\
+[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,\
+pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=rgb24[base];\
+[1:v]scale=1080:1920,setsar=1,format=rgb24[titled];\
+[base][titled]overlay=0:0:enable='gte(t,${TEXT_DELAY})'[v]" \
+            -map "[v]" -r 30 -t 60 \
+            -c:v libx264 -preset slow -crf 20 -tune stillimage \
+            -pix_fmt yuv420p "$silent" \
+            || { echo "❌ Не удалось создать видео" >&2; return 1; }
+    else
+        echo "🎬 Тихое видео актуально — переиспользую."
     fi
 
-    if [ ! -f "$dir/video_silent.mp4" ]; then
-	    echo "🎬 Создаю видео: картинка → подписи через ${TEXT_DELAY}с..."
-	    ffmpeg -y -loglevel error \
-	      -loop 1 -framerate 30 -i "$img" \
-	      -loop 1 -framerate 30 -i "$dir/titles.png" \
-	      -filter_complex "\
-	[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=rgb24[base];\
-	[1:v]scale=1080:1920,setsar=1,format=rgb24[titled];\
-	[base][titled]overlay=0:0:enable='gte(t,${TEXT_DELAY})'[v]" \
-	      -map "[v]" -r 30 -t 60 \
-	      -c:v libx264 -preset slow -crf 20 -tune stillimage \
-	      -pix_fmt yuv420p "$dir/video_silent.mp4"
-    fi
-
-    # 2. Записываем аудио с попытками
-    echo "Текст для озвучки (из README.md):"
-    echo "------------------------------------------------"
-    [ -f "$dir/README.md" ] && cat "$dir/README.md" || echo "(README.md не найден)"
-    echo
-    echo "------------------------------------------------"
-    read -rp "⏳ Нажмите Enter, чтобы начать запись звука для видео…" ans
-    attempt=1
-    audio_ok=0
-    while [ $attempt -le $MAX_ATTEMPTS ]; do
+    # --- 2. Запись голоса с подтверждением ---
+    read -r -p "⏳ Нажмите Enter, когда будете готовы говорить." ans || ans=n
+    local audio_ok=0
+    for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
         echo
         echo "🎤 Попытка $attempt/$MAX_ATTEMPTS."
-        echo "   Говорите в микрофон. Когда закончите — нажмите 'q'."
-        
-        # Запись в WAV
-        ffmpeg -loglevel warning $AUDIO_SRC \
-          -ac 2 -ar 44100 \
-          "$dir/audio_temp.wav"
+        echo "Текст для озвучки:"
+        echo "------------------------------------------------"
+        cat "$readme"
+        echo
+        echo "------------------------------------------------"
+        echo "   Говорите в микрофон. Для остановки нажмите 'q' в окне ffmpeg."
 
-        # Конвертация в MP3
-        ffmpeg -y -loglevel warning -i "$dir/audio_temp.wav" \
-          -c:a libmp3lame -b:a 192k \
-          "$dir/audio.mp3"
+        rm -f "$dir/audio_temp.wav" "$audio"
 
+        ffmpeg "${AUDIO_IN[@]}" -ac 2 -ar 44100 -loglevel error "$dir/audio_temp.wav"
+        if [[ ! -s "$dir/audio_temp.wav" ]]; then
+            echo "❌ Запись пуста или не удалась."
+            continue
+        fi
+
+        ffmpeg -y -loglevel error -i "$dir/audio_temp.wav" -loglevel error \
+            -c:a libmp3lame -b:a 192k "$audio" \
+            || { echo "❌ Ошибка конвертации в MP3"; continue; }
         rm -f "$dir/audio_temp.wav"
 
-        echo
-        read -rp "👂 Устраивает качество аудио? (y/n): " ans
+        read -r -p "👂 Устраивает качество аудио? (y/n): " ans || ans=n
         case "$ans" in
-            [yY]*)
-                audio_ok=1
-                break
-                ;;
-            [nN]*)
-                rm -f "$dir/audio.mp3"
-                attempt=$((attempt + 1))
-                if [ $attempt -gt $MAX_ATTEMPTS ]; then
-                    echo "❌ Лимит попыток исчерпан — пропускаю директорию."
-                fi
-                ;;
-            *)
-                echo "   Не понял ответ, считаю за 'n'."
-                rm -f "$dir/audio.mp3"
-                attempt=$((attempt + 1))
-                ;;
+            [yY]*) audio_ok=1; break ;;
+            *)     echo "   Пробуем ещё."; rm -f "$audio" ;;
         esac
     done
 
-    [ "$audio_ok" -eq 0 ] && continue
+    if [[ "$audio_ok" -ne 1 ]]; then
+        echo "❌ $dir: лимит попыток исчерпан."
+        return 1
+    fi
 
-    # 3. Склеиваем видео и аудио
+    # --- 3. Финальная склейка ---
     echo "🎞  Собираю финальное видео..."
-    ffmpeg -y -i "$dir/video_silent.mp4" -i "$dir/audio.mp3" \
-      -c:v copy -c:a copy -shortest \
-      -movflags +faststart \
-      "$dir/short.mp4"
+    ffmpeg -y -loglevel error \
+        -i "$silent" -i "$audio" \
+        -c:v copy -c:a copy -shortest \
+        -movflags +faststart "$dir/short.mp4" \
+        || { echo "❌ Не удалось склеить" >&2; return 1; }
 
     echo "✅ Готово: $dir/short.mp4"
+    return 0
+}
+
+# ============================================================
+# Точка входа
+# ============================================================
+if [[ $# -gt 0 ]]; then
+    # --- Режим одной директории ---
+    if [[ $# -gt 1 ]]; then
+        echo "Использование: $0 [имя_директории]" >&2
+        exit 1
+    fi
+
+    target="${1%/}"
+    # Разрешаем и "2026-10-29", и "./2026-10-29", и полный путь
+    if [[ "$target" != */* && ! -d "$target" && -d "./$target" ]]; then
+        target="./$target"
+    fi
+
+    if [[ ! -d "$target" ]]; then
+        echo "❌ Директория не найдена: $target" >&2
+        exit 1
+    fi
+
+    process_directory "$target"
+    exit $?
+fi
+
+# --- Пакетный режим ---
+shopt -s nullglob
+dirs=( [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] )
+shopt -u nullglob
+
+if [[ ${#dirs[@]} -eq 0 ]]; then
+    echo "Директории с датами не найдены."
+    exit 0
+fi
+
+for dir in "${dirs[@]}"; do
+    [[ "$dir" < "$TODAY" ]] && continue      # прошлые даты — не трогаем
+    [[ -f "$dir/audio.mp3" ]] && continue    # уже озвучено — пропускаем
+    process_directory "$dir" || echo "⚠  Ошибка в $dir, продолжаю дальше."
 done
 
 echo
