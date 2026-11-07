@@ -5,6 +5,7 @@ TODAY=$(date +%Y-%m-%d)
 MAX_ATTEMPTS=3
 TEXT_DELAY=3
 MIC="alsa_input.usb-MUSIC-BOOST_Usb_Microphone-00.mono-fallback"
+WITH_AUDIO=1
 
 # --- Источник аудио (массив, чтобы корректно передавать аргументы) ---
 case "$(uname -s)" in
@@ -78,52 +79,54 @@ pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=rgb24[base];\
     fi
 
     # --- 2. Запись голоса с подтверждением ---
-    read -r -p "⏳ Нажмите Enter, когда будете готовы говорить." ans || ans=n
-    local audio_ok=0
-    for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
-        echo
-        echo "🎤 Попытка $attempt/$MAX_ATTEMPTS."
-        echo "Текст для озвучки:"
-        echo "------------------------------------------------"
-        cat "$readme"
-        echo
-        echo "------------------------------------------------"
-        echo "   Говорите в микрофон. Для остановки нажмите 'q' в окне ffmpeg."
+    if [ -n "$WITH_AUDIO" ]; then
+	    local audio_ok=0
+	    for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
+		echo
+		echo "🎤 Попытка $attempt/$MAX_ATTEMPTS."
+		echo "Текст для озвучки:"
+		echo "------------------------------------------------"
+		cat "$readme"
+		echo
+		echo "------------------------------------------------"
+		read -r -p "⏳ Нажмите Enter, когда будете готовы говорить." ans || ans=n
+		echo "   Говорите в микрофон. Для остановки нажмите 'q' в окне ffmpeg."
 
-        rm -f "$dir/audio_temp.wav" "$audio"
+		rm -f "$dir/audio_temp.wav" "$audio"
 
-        ffmpeg "${AUDIO_IN[@]}" -ac 2 -ar 44100 -loglevel error "$dir/audio_temp.wav"
-        if [[ ! -s "$dir/audio_temp.wav" ]]; then
-            echo "❌ Запись пуста или не удалась."
-            continue
-        fi
+		ffmpeg "${AUDIO_IN[@]}" -ac 2 -ar 44100 -loglevel error "$dir/audio_temp.wav"
+		if [[ ! -s "$dir/audio_temp.wav" ]]; then
+		    echo "❌ Запись пуста или не удалась."
+		    continue
+		fi
 
-        ffmpeg -y -loglevel error -i "$dir/audio_temp.wav" -loglevel error \
-            -c:a libmp3lame -b:a 192k "$audio" \
-            || { echo "❌ Ошибка конвертации в MP3"; continue; }
-        rm -f "$dir/audio_temp.wav"
+		ffmpeg -y -loglevel error -i "$dir/audio_temp.wav" -loglevel error \
+		    -c:a libmp3lame -b:a 192k "$audio" \
+		    || { echo "❌ Ошибка конвертации в MP3"; continue; }
+		rm -f "$dir/audio_temp.wav"
 
-        read -r -p "👂 Устраивает качество аудио? (y/n): " ans || ans=n
-        case "$ans" in
-            [yY]*) audio_ok=1; break ;;
-            *)     echo "   Пробуем ещё."; rm -f "$audio" ;;
-        esac
-    done
+		read -r -p "👂 Устраивает качество аудио? (y/n): " ans || ans=n
+		case "$ans" in
+		    [yY]*) audio_ok=1; break ;;
+		    *)     echo "   Пробуем ещё."; rm -f "$audio" ;;
+		esac
+	    done
 
-    if [[ "$audio_ok" -ne 1 ]]; then
-        echo "❌ $dir: лимит попыток исчерпан."
-        return 1
+	    if [[ "$audio_ok" -ne 1 ]]; then
+		echo "❌ $dir: лимит попыток исчерпан."
+		return 1
+	    fi
+
+	    # --- 3. Финальная склейка ---
+	    echo "🎞  Собираю финальное видео..."
+	    ffmpeg -y -loglevel error \
+		-i "$silent" -i "$audio" \
+		-c:v copy -c:a copy -shortest \
+		-movflags +faststart "$dir/short.mp4" \
+		|| { echo "❌ Не удалось склеить" >&2; return 1; }
+
+	    echo "✅ Готово: $dir/short.mp4"
     fi
-
-    # --- 3. Финальная склейка ---
-    echo "🎞  Собираю финальное видео..."
-    ffmpeg -y -loglevel error \
-        -i "$silent" -i "$audio" \
-        -c:v copy -c:a copy -shortest \
-        -movflags +faststart "$dir/short.mp4" \
-        || { echo "❌ Не удалось склеить" >&2; return 1; }
-
-    echo "✅ Готово: $dir/short.mp4"
     return 0
 }
 
